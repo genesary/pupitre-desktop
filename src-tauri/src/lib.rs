@@ -161,11 +161,11 @@ fn distrobox_container_exists(container_name: &str) -> bool {
 fn distrobox_app_exported(app: &str) -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     let apps_dir = std::path::Path::new(&home).join(".local/share/applications");
-    apps_dir.read_dir().ok().map_or(false, |mut entries| {
+    apps_dir.read_dir().ok().is_some_and(|mut entries| {
         entries.any(|e| {
             e.ok()
                 .and_then(|e| e.file_name().into_string().ok())
-                .map_or(false, |name| name.contains(app))
+                .is_some_and(|name| name.contains(app))
         })
     })
 }
@@ -252,6 +252,7 @@ fn check_distrobox_lab3(params: DistroboxLab3Params) -> Result<LocalCheckResult,
 
 /// Point d'entrée générique pour les checks locaux.
 #[tauri::command]
+#[allow(non_snake_case)]
 fn local_check(
     checkType: String,
     params: serde_json::Value,
@@ -309,7 +310,7 @@ pub fn run() {
             // Deep link au lancement : priorité absolue sur la config
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 if let Some(url) = urls.first() {
-                    let nav_url = deep_link_to_nav_url(&url.to_string());
+                    let nav_url = deep_link_to_nav_url(url.as_ref());
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.navigate(nav_url.parse().unwrap());
                     }
