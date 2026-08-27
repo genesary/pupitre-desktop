@@ -74,4 +74,4 @@ jobs:
         with:
           files: |
             src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/rpm/x86_64/*.rpm
+            src-tauri/target/release/bundle/rpm/*.rpm
