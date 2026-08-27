@@ -3,6 +3,35 @@ use std::process::Command;
 use tauri::{Listener, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
+// ── Configuration /etc/pupitre/config.toml ──────────────────────────────────
+
+const CONFIG_PATH: &str = "/etc/pupitre/config.toml";
+const DEFAULT_BROWSER_URL: &str = "http://localhost:3000";
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PupitreConfig {
+    pub browser_url: String,
+}
+
+impl Default for PupitreConfig {
+    fn default() -> Self {
+        Self { browser_url: DEFAULT_BROWSER_URL.to_string() }
+    }
+}
+
+fn load_config() -> PupitreConfig {
+    std::fs::read_to_string(CONFIG_PATH)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Retourne la configuration active lue depuis /etc/pupitre/config.toml.
+#[tauri::command]
+fn get_config() -> PupitreConfig {
+    load_config()
+}
+
 #[derive(Serialize)]
 pub struct LocalCheckResult {
     pub allow: bool,
@@ -132,11 +161,11 @@ fn distrobox_container_exists(container_name: &str) -> bool {
 fn distrobox_app_exported(app: &str) -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     let apps_dir = std::path::Path::new(&home).join(".local/share/applications");
-    apps_dir.read_dir().ok().map_or(false, |mut entries| {
+    apps_dir.read_dir().ok().is_some_and(|mut entries| {
         entries.any(|e| {
             e.ok()
                 .and_then(|e| e.file_name().into_string().ok())
-                .map_or(false, |name| name.contains(app))
+                .is_some_and(|name| name.contains(app))
         })
     })
 }
@@ -223,6 +252,7 @@ fn check_distrobox_lab3(params: DistroboxLab3Params) -> Result<LocalCheckResult,
 
 /// Point d'entrée générique pour les checks locaux.
 #[tauri::command]
+#[allow(non_snake_case)]
 fn local_check(
     checkType: String,
     params: serde_json::Value,
@@ -273,15 +303,24 @@ pub fn run() {
             check_distrobox_lab3,
             check_distrobox_lab3_container,
             check_distrobox_lab3_install,
-            check_distrobox_lab3_export
+            check_distrobox_lab3_export,
+            get_config,
         ])
         .setup(|app| {
-            // Lancement frais via pupitre:// : récupère l'URL qui a ouvert l'app
+            // Deep link au lancement : priorité absolue sur la config
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 if let Some(url) = urls.first() {
-                    let nav_url = deep_link_to_nav_url(&url.to_string());
+                    let nav_url = deep_link_to_nav_url(url.as_ref());
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.navigate(nav_url.parse().unwrap());
+                    }
+                }
+            } else {
+                // Pas de deep link : naviguer vers l'URL configurée dans /etc/pupitre/config.toml
+                let config = load_config();
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(url) = config.browser_url.parse() {
+                        let _ = window.navigate(url);
                     }
                 }
             }
