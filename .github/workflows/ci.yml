@@ -63,7 +63,7 @@ jobs:
         run: npm ci
 
       - name: Build RPM
-        run: npm run tauri build -- --bundles rpm
+        run: npm run build -- --bundles rpm
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
