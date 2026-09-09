@@ -3,6 +3,36 @@ use std::process::Command;
 use tauri::{Listener, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
+// ── Configuration ────────────────────────────────────────────────────────────
+
+const CONFIG_PATH: &str = "/etc/pupitre/config.toml";
+const DEFAULT_BROWSER_URL: &str = "http://localhost:3000";
+
+/// Représente le fichier de configuration `/etc/pupitre/config.toml`.
+///
+/// Toutes les clés sont optionnelles : une valeur manquante revient
+/// à la valeur par défaut codée en dur.
+#[derive(Deserialize, Default)]
+struct AppConfig {
+    /// URL de la plateforme e-learning à charger dans la fenêtre principale.
+    browser_url: Option<String>,
+}
+
+impl AppConfig {
+    fn browser_url(&self) -> &str {
+        self.browser_url
+            .as_deref()
+            .unwrap_or(DEFAULT_BROWSER_URL)
+    }
+}
+
+fn load_config() -> AppConfig {
+    let Ok(content) = std::fs::read_to_string(CONFIG_PATH) else {
+        return AppConfig::default();
+    };
+    toml::from_str(&content).unwrap_or_default()
+}
+
 #[derive(Serialize)]
 pub struct LocalCheckResult {
     pub allow: bool,
@@ -132,11 +162,11 @@ fn distrobox_container_exists(container_name: &str) -> bool {
 fn distrobox_app_exported(app: &str) -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     let apps_dir = std::path::Path::new(&home).join(".local/share/applications");
-    apps_dir.read_dir().ok().map_or(false, |mut entries| {
+    apps_dir.read_dir().ok().is_some_and(|mut entries| {
         entries.any(|e| {
             e.ok()
                 .and_then(|e| e.file_name().into_string().ok())
-                .map_or(false, |name| name.contains(app))
+                .is_some_and(|name| name.contains(app))
         })
     })
 }
@@ -221,13 +251,20 @@ fn check_distrobox_lab3(params: DistroboxLab3Params) -> Result<LocalCheckResult,
     Ok(LocalCheckResult { allow: violations.is_empty(), violations })
 }
 
+/// Retourne l'URL du navigateur configurée dans `/etc/pupitre/config.toml`.
+/// Utilisé par le splashscreen pour savoir quelle URL attendre avant d'afficher la fenêtre principale.
+#[tauri::command]
+fn get_browser_url() -> String {
+    load_config().browser_url().to_owned()
+}
+
 /// Point d'entrée générique pour les checks locaux.
 #[tauri::command]
 fn local_check(
-    checkType: String,
+    check_type: String,
     params: serde_json::Value,
 ) -> Result<LocalCheckResult, String> {
-    match checkType.as_str() {
+    match check_type.as_str() {
         "podman_images" => {
             let p: PodmanCheckParams = serde_json::from_value(params)
                 .map_err(|e| format!("Params invalides : {e}"))?;
@@ -258,7 +295,7 @@ fn local_check(
                 .map_err(|e| format!("Params invalides : {e}"))?;
             check_distrobox_lab3_export(p)
         }
-        _ => Err(format!("checkType inconnu : {checkType}")),
+        _ => Err(format!("checkType inconnu : {check_type}")),
     }
 }
 
@@ -267,6 +304,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
+            get_browser_url,
             local_check,
             check_podman_images,
             check_podman_lab2,
@@ -276,10 +314,33 @@ pub fn run() {
             check_distrobox_lab3_export
         ])
         .setup(|app| {
+            let config = load_config();
+
+            // Ferme le splash et affiche la fenêtre principale une fois chargée
+            if let (Some(splash), Some(main)) = (
+                app.get_webview_window("splashscreen"),
+                app.get_webview_window("main"),
+            ) {
+                // Navigue vers l'URL lue dans /etc/pupitre/config.toml
+                // (remplace la valeur statique de tauri.conf.json).
+                if let Ok(url) = config.browser_url().parse() {
+                    let _ = main.navigate(url);
+                }
+
+                // Affiche la fenêtre principale et ferme le splash dès que
+                // le splashscreen émet l'événement "pupitre://ready" (déclenché
+                // par JS quand la fenêtre principale a répondu au ping HTTP).
+                let main_clone = main.clone();
+                app.listen("pupitre://ready", move |_| {
+                    let _ = main_clone.show();
+                    let _ = splash.close();
+                });
+            }
+
             // Lancement frais via pupitre:// : récupère l'URL qui a ouvert l'app
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 if let Some(url) = urls.first() {
-                    let nav_url = deep_link_to_nav_url(&url.to_string());
+                    let nav_url = deep_link_to_nav_url(url.as_ref());
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.navigate(nav_url.parse().unwrap());
                     }

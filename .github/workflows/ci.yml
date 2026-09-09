@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Lint ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  # ── Build RPM ─────────────────────────────────────────────────────────────
+  build-rpm:
+    name: Build RPM (Fedora ${{ matrix.fedora }})
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:${{ matrix.fedora }}
+    strategy:
+      matrix:
+        fedora: ["43", "44"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          dnf install -y \
+            webkit2gtk4.1-devel openssl-devel curl wget file \
+            libappindicator-gtk3-devel librsvg2-devel rpm-build \
+            nodejs npm git
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: npm install
+        run: npm ci
+
+      - name: Build RPM
+        run: npm run tauri build -- --bundles rpm
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pupitre-fedora${{ matrix.fedora }}.rpm
+          path: src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+
+      - name: Attach RPM to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/rpm/*.rpm
+          name: "Pupitre ${{ github.ref_name }}"
+          fail_on_unmatched_files: true

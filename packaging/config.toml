@@ -1,0 +1,8 @@
+# /etc/pupitre/config.toml
+# Configuration de l'application Pupitre.
+# Ce fichier est lu au démarrage — toute modification est effective
+# au prochain lancement de l'application.
+
+# URL de la plateforme e-learning à charger dans la fenêtre principale.
+# Valeur par défaut si ce fichier est absent : http://localhost:3000
+browser_url = "http://localhost:3000"
