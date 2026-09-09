@@ -3,34 +3,33 @@ use std::process::Command;
 use tauri::{Listener, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
-// ── Configuration ────────────────────────────────────────────────────────────
+// ── Configuration /etc/pupitre/config.toml ──────────────────────────────────
 
 const CONFIG_PATH: &str = "/etc/pupitre/config.toml";
 const DEFAULT_BROWSER_URL: &str = "http://localhost:3000";
 
-/// Représente le fichier de configuration `/etc/pupitre/config.toml`.
-///
-/// Toutes les clés sont optionnelles : une valeur manquante revient
-/// à la valeur par défaut codée en dur.
-#[derive(Deserialize, Default)]
-struct AppConfig {
-    /// URL de la plateforme e-learning à charger dans la fenêtre principale.
-    browser_url: Option<String>,
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PupitreConfig {
+    pub browser_url: String,
 }
 
-impl AppConfig {
-    fn browser_url(&self) -> &str {
-        self.browser_url
-            .as_deref()
-            .unwrap_or(DEFAULT_BROWSER_URL)
+impl Default for PupitreConfig {
+    fn default() -> Self {
+        Self { browser_url: DEFAULT_BROWSER_URL.to_string() }
     }
 }
 
-fn load_config() -> AppConfig {
-    let Ok(content) = std::fs::read_to_string(CONFIG_PATH) else {
-        return AppConfig::default();
-    };
-    toml::from_str(&content).unwrap_or_default()
+fn load_config() -> PupitreConfig {
+    std::fs::read_to_string(CONFIG_PATH)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Retourne la configuration active lue depuis /etc/pupitre/config.toml.
+#[tauri::command]
+fn get_config() -> PupitreConfig {
+    load_config()
 }
 
 #[derive(Serialize)]
@@ -251,11 +250,9 @@ fn check_distrobox_lab3(params: DistroboxLab3Params) -> Result<LocalCheckResult,
     Ok(LocalCheckResult { allow: violations.is_empty(), violations })
 }
 
-/// Retourne l'URL du navigateur configurée dans `/etc/pupitre/config.toml`.
-/// Utilisé par le splashscreen pour savoir quelle URL attendre avant d'afficher la fenêtre principale.
 #[tauri::command]
 fn get_browser_url() -> String {
-    load_config().browser_url().to_owned()
+    load_config().browser_url
 }
 
 /// Point d'entrée générique pour les checks locaux.
@@ -311,40 +308,33 @@ pub fn run() {
             check_distrobox_lab3,
             check_distrobox_lab3_container,
             check_distrobox_lab3_install,
-            check_distrobox_lab3_export
+            check_distrobox_lab3_export,
+            get_config,
         ])
         .setup(|app| {
             let config = load_config();
 
-            // Ferme le splash et affiche la fenêtre principale une fois chargée
             if let (Some(splash), Some(main)) = (
                 app.get_webview_window("splashscreen"),
                 app.get_webview_window("main"),
             ) {
-                // Navigue vers l'URL lue dans /etc/pupitre/config.toml
-                // (remplace la valeur statique de tauri.conf.json).
-                if let Ok(url) = config.browser_url().parse() {
+                // Deep link au lancement : priorité absolue sur la config
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    if let Some(url) = urls.first() {
+                        let nav_url = deep_link_to_nav_url(url.as_ref());
+                        if let Ok(parsed) = nav_url.parse() {
+                            let _ = main.navigate(parsed);
+                        }
+                    }
+                } else if let Ok(url) = config.browser_url.parse() {
                     let _ = main.navigate(url);
                 }
 
-                // Affiche la fenêtre principale et ferme le splash dès que
-                // le splashscreen émet l'événement "pupitre://ready" (déclenché
-                // par JS quand la fenêtre principale a répondu au ping HTTP).
                 let main_clone = main.clone();
                 app.listen("pupitre://ready", move |_| {
                     let _ = main_clone.show();
                     let _ = splash.close();
                 });
-            }
-
-            // Lancement frais via pupitre:// : récupère l'URL qui a ouvert l'app
-            if let Ok(Some(urls)) = app.deep_link().get_current() {
-                if let Some(url) = urls.first() {
-                    let nav_url = deep_link_to_nav_url(url.as_ref());
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.navigate(nav_url.parse().unwrap());
-                    }
-                }
             }
 
             // App déjà ouverte : reçoit un nouveau deep link
