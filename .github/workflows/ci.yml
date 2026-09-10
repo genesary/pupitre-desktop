@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -80,5 +79,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: src-tauri/target/release/bundle/rpm/*.rpm
-          name: "Pupitre ${{ github.ref_name }}"
+          name: "pupitre_${{ github.ref_name }}.rpm"
           fail_on_unmatched_files: true
