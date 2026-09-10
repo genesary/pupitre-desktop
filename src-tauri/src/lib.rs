@@ -250,14 +250,18 @@ fn check_distrobox_lab3(params: DistroboxLab3Params) -> Result<LocalCheckResult,
     Ok(LocalCheckResult { allow: violations.is_empty(), violations })
 }
 
+#[tauri::command]
+fn get_browser_url() -> String {
+    load_config().browser_url
+}
+
 /// Point d'entrée générique pour les checks locaux.
 #[tauri::command]
-#[allow(non_snake_case)]
 fn local_check(
-    checkType: String,
+    check_type: String,
     params: serde_json::Value,
 ) -> Result<LocalCheckResult, String> {
-    match checkType.as_str() {
+    match check_type.as_str() {
         "podman_images" => {
             let p: PodmanCheckParams = serde_json::from_value(params)
                 .map_err(|e| format!("Params invalides : {e}"))?;
@@ -288,7 +292,7 @@ fn local_check(
                 .map_err(|e| format!("Params invalides : {e}"))?;
             check_distrobox_lab3_export(p)
         }
-        _ => Err(format!("checkType inconnu : {checkType}")),
+        _ => Err(format!("checkType inconnu : {check_type}")),
     }
 }
 
@@ -297,6 +301,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
+            get_browser_url,
             local_check,
             check_podman_images,
             check_podman_lab2,
@@ -307,22 +312,29 @@ pub fn run() {
             get_config,
         ])
         .setup(|app| {
-            // Deep link au lancement : priorité absolue sur la config
-            if let Ok(Some(urls)) = app.deep_link().get_current() {
-                if let Some(url) = urls.first() {
-                    let nav_url = deep_link_to_nav_url(url.as_ref());
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.navigate(nav_url.parse().unwrap());
+            let config = load_config();
+
+            if let (Some(splash), Some(main)) = (
+                app.get_webview_window("splashscreen"),
+                app.get_webview_window("main"),
+            ) {
+                // Deep link au lancement : priorité absolue sur la config
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    if let Some(url) = urls.first() {
+                        let nav_url = deep_link_to_nav_url(url.as_ref());
+                        if let Ok(parsed) = nav_url.parse() {
+                            let _ = main.navigate(parsed);
+                        }
                     }
+                } else if let Ok(url) = config.browser_url.parse() {
+                    let _ = main.navigate(url);
                 }
-            } else {
-                // Pas de deep link : naviguer vers l'URL configurée dans /etc/pupitre/config.toml
-                let config = load_config();
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(url) = config.browser_url.parse() {
-                        let _ = window.navigate(url);
-                    }
-                }
+
+                let main_clone = main.clone();
+                app.listen("pupitre://ready", move |_| {
+                    let _ = main_clone.show();
+                    let _ = splash.close();
+                });
             }
 
             // App déjà ouverte : reçoit un nouveau deep link
